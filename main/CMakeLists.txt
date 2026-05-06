@@ -1,0 +1,13 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "hall_sensor.c"
+        "ble_csc.c"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        nvs_flash
+        bt
+        driver
+        esp_timer
+)
