@@ -22,6 +22,8 @@ standard BLE CSC service (UUID **0x1816**).
 - SC Control Point support — clients can reset the wheel revolution counter
 - Instantaneous speed logged to serial (km/h), calculated from wheel pulse interval
 - Configurable pins, wheel circumference, debounce time, and device name via [`main/config.h`](main/config.h)
+- Stepper motor driver for magnetic brake positioning (ready, not yet active)
+- FTMS BLE service (UUID 0x1826) for ERG / target-power control (ready, not yet active)
 
 ---
 
@@ -34,13 +36,18 @@ standard BLE CSC service (UUID **0x1816**).
 | 1 | ESP32-WROOM-32 dev board |
 | 2 | SS41F unipolar Hall-effect switch |
 | 2 | Small neodymium magnet (one per sensing location) |
+| 1 | Stepper motor (e.g. NEMA 17) |
+| 1 | A4988 or DRV8825 stepper driver module |
+| 1 | 12 V power supply for motor (current rating ≥ motor rated current) |
+| 1 | 100 µF electrolytic capacitor (across VMOT/GND on driver) |
+| 1 | NO microswitch — homing limit switch *(optional but recommended)* |
 
 The SS41F has an active-low, open-collector output.  The ESP32's internal
 pull-up resistors are enabled in firmware, so no external resistors are
 required.  For cable runs longer than ~30 cm an external 4.7 kΩ pull-up to
 3.3 V is recommended.
 
-### Wiring
+### Hall sensor wiring
 
 ```
 SS41F (wheel)          ESP32
@@ -58,6 +65,59 @@ SS41F (crank)
 The output is pulled low when the sensor detects a magnet (south pole facing
 the sensor).  A falling-edge interrupt increments the revolution counter.
 
+### Stepper motor wiring (A4988 / DRV8825)
+
+The driver sits between the ESP32 and the stepper motor coils.  Logic-side
+signals run at 3.3 V; motor power (VMOT) is typically 12 V and must be
+supplied separately.
+
+```
+ESP32              A4988 / DRV8825        Stepper motor
+─────              ───────────────        ─────────────
+3V3  ──────────── VDD   (logic power)
+GND  ──────────── GND   (logic ground)
+GPIO 25 ─────────  STEP
+GPIO 26 ─────────  DIR
+                   SLEEP ── 3V3           (keep HIGH to enable driver)
+                   RESET ── 3V3           (keep HIGH to enable driver)
+
+External supply:
+12 V ─────────── VMOT   (motor power — add 100 µF cap close to driver)
+GND  ──────────── GND   (shared ground)
+
+                   1A ────────────────── Coil A+
+                   1B ────────────────── Coil A−
+                   2A ────────────────── Coil B+
+                   2B ────────────────── Coil B−
+```
+
+> **Current limit:** Set the A4988/DRV8825 Vref trimmer before powering the
+> motor.  Exceeding the motor's rated current will cause overheating.
+
+> **Microstepping:** MS1/MS2/MS3 pins are left unconnected (full-step mode by
+> default on A4988).  Tie them to 3V3/GND to select a finer step mode and
+> update `STEPPER_MAX_STEPS` and `STEPPER_STEP_PERIOD_US` in `config.h`
+> accordingly.
+
+### Limit switch wiring
+
+A normally-open (NO) microswitch wired active-low.  The ESP32 internal
+pull-up keeps the line high; the switch pulls it low at the home end-stop.
+Update `STEPPER_LIMIT_GPIO` in `config.h` once wired.
+
+```
+ESP32                        Limit switch (NO microswitch)
+─────                        ─────────────────────────────
+GPIO 27 ──┬──────────────── COM  (common)
+          │                 NO   (normally open) ── GND
+          └── (internal pull-up enabled in firmware)
+```
+
+```c
+// config.h — change -1 to the chosen GPIO
+#define STEPPER_LIMIT_GPIO   27
+```
+
 ### Magnet placement
 
 - **Wheel** — attach one magnet to a spoke; mount the sensor on a fixed part
@@ -72,7 +132,7 @@ the sensor).  A falling-edge interrupt increments the revolution counter.
 All user-configurable constants are in [`main/config.h`](main/config.h):
 
 ```c
-/* GPIO pins */
+/* GPIO pins — hall sensors */
 #define HALL_WHEEL_GPIO         18
 #define HALL_CRANK_GPIO         19
 
@@ -87,6 +147,13 @@ All user-configurable constants are in [`main/config.h`](main/config.h):
 
 /* BLE Sensor Location: 6 = Rear Wheel */
 #define SENSOR_LOCATION         6U
+
+/* Stepper motor — step/dir interface (A4988 / DRV8825) */
+#define STEPPER_STEP_GPIO       25
+#define STEPPER_DIR_GPIO        26
+#define STEPPER_LIMIT_GPIO      -1   /* set to a GPIO if a limit switch is fitted */
+#define STEPPER_MAX_STEPS       2000 /* tune to match physical travel */
+#define STEPPER_STEP_PERIOD_US  500  /* ~2000 steps/s */
 ```
 
 Set `WHEEL_CIRCUMFERENCE_MM` to match your tyre.  Common values:
@@ -160,8 +227,32 @@ CadenceSensor/
     ├── config.h            User-configurable pins and constants
     ├── main.c              Entry point — init + 1 Hz notification loop
     ├── hall_sensor.h/.c    GPIO ISR revolution counter + speed calculation
-    └── ble_csc.h/.c        NimBLE GATT server implementing the CSC Profile
+    ├── ble_csc.h/.c        NimBLE GATT server — CSC Profile (active)
+    ├── stepper.h/.c        Stepper motor driver — magnetic brake (inactive)
+    └── ble_ftms.h/.c       NimBLE GATT server — FTMS / ERG profile (inactive)
 ```
+
+---
+
+## ERG mode roadmap
+
+The codebase already contains the BLE and motor scaffolding for ERG mode.
+The remaining work is:
+
+1. **Resistance hardware** — wire the stepper motor and driver (A4988/DRV8825)
+   to the GPIOs defined in `config.h`.  Add a limit switch if possible and set
+   `STEPPER_LIMIT_GPIO` accordingly.
+2. **Activate the stepper** — call `stepper_init()` and `stepper_home()` in
+   `main.c` during startup.
+3. **Power estimation** — characterise the brake (measured watts vs. step
+   position at several speeds) and store a lookup table in a new
+   `brake_control.c`.
+4. **Activate FTMS** — call `ble_ftms_register_services()` during BLE init
+   so apps can send target power via the Fitness Machine Control Point
+   (opcode `0x05`).
+5. **PID control loop** — in the main task, read `ble_ftms_get_target_power()`,
+   compare to estimated actual watts, and drive `stepper_move_to()` to close
+   the loop.
 
 ---
 

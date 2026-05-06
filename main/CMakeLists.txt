@@ -3,6 +3,8 @@ idf_component_register(
         "main.c"
         "hall_sensor.c"
         "ble_csc.c"
+        "stepper.c"
+        "ble_ftms.c"
     INCLUDE_DIRS
         "."
     REQUIRES

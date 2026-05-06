@@ -47,3 +47,38 @@
  * Value 6 = "Rear Wheel" per the BT GATT Assigned Numbers specification.
  */
 #define SENSOR_LOCATION         6U
+
+/* --------------------------------------------------------------------------
+ * Stepper motor — magnetic brake
+ *
+ * Step/direction interface compatible with A4988 / DRV8825 drivers.
+ * Set STEPPER_LIMIT_GPIO to -1 if no limit switch is fitted (homing will
+ * rely solely on the STEPPER_MAX_STEPS safety limit).
+ * -------------------------------------------------------------------------- */
+
+/** GPIO connected to the driver STEP input. */
+#define STEPPER_STEP_GPIO       25
+
+/** GPIO connected to the driver DIR input. */
+#define STEPPER_DIR_GPIO        26
+
+/**
+ * GPIO connected to the homing limit switch (active-low).
+ * Set to -1 if no limit switch is fitted.
+ */
+#define STEPPER_LIMIT_GPIO      -1
+
+/** Direction level that moves the magnet toward the flywheel (more resistance). */
+#define STEPPER_DIR_INCREASE    1
+
+/** Direction level that moves the magnet away from the flywheel (less resistance). */
+#define STEPPER_DIR_DECREASE    0
+
+/** Maximum travel in steps from home (tune to match your physical mechanism). */
+#define STEPPER_MAX_STEPS       2000
+
+/** Step pulse high time in microseconds (A4988 minimum is 1 µs). */
+#define STEPPER_PULSE_US        2
+
+/** Total period per step in microseconds — sets motor speed (500 µs = 2000 steps/s). */
+#define STEPPER_STEP_PERIOD_US  500
