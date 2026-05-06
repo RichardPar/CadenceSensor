@@ -23,6 +23,28 @@
  * -------------------------------------------------------------------------- */
 
 /**
+ * Set to 1 to use only the crank hall sensor and derive wheel revolutions
+ * from the fixed gear ratio defined below.  Set to 0 to fit a dedicated
+ * wheel sensor.
+ *
+ * Because the wheel and crank are coupled by a fixed gear, wheel speed can
+ * be computed from cadence alone:
+ *   wheel_revs = crank_revs × GEAR_RATIO_CHAINRING / GEAR_RATIO_SPROCKET
+ */
+#define SINGLE_SENSOR_MODE      0
+
+/**
+ * Wheel revolutions per crank revolution.
+ * Calculated as chainring teeth ÷ sprocket teeth.
+ * Used only when SINGLE_SENSOR_MODE = 1.
+ *
+ * Examples:
+ *   50T chainring, 17T sprocket → 50.0f / 17.0f ≈ 2.94f
+ *   42T chainring, 16T sprocket → 42.0f / 16.0f  = 2.625f
+ */
+#define GEAR_RATIO              (50.0f / 17.0f)
+
+/**
  * Minimum time between accepted pulses on each sensor, in milliseconds.
  * Pulses arriving faster than this are treated as contact bounce and ignored.
  */

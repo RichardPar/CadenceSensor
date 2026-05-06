@@ -22,9 +22,25 @@ static volatile uint16_t s_wheel_event_time_1024 = 0;
 static volatile uint64_t s_wheel_interval_us     = 0; /* interval between last two pulses */
 
 /* Crank counters (ISR-updated) */
-static volatile uint16_t s_crank_revs          = 0;
-static volatile uint64_t s_last_crank_us        = 0;
+static volatile uint16_t s_crank_revs           = 0;
+static volatile uint64_t s_last_crank_us         = 0;
 static volatile uint16_t s_crank_event_time_1024 = 0;
+
+/* Integer-scaled gear ratio constants — computed at compile time from the
+ * float GEAR_RATIO in config.h so that ISR arithmetic stays integer-only.
+ * (Float ops in an ISR corrupt the FPU context of the interrupted task.)
+ *
+ *   GEAR_ACCUM_SCALE  : fixed-point denominator (100 000)
+ *   GEAR_ACCUM_STEP   : GEAR_RATIO × GEAR_ACCUM_SCALE, rounded to nearest
+ *
+ * Accumulator fires a wheel rev each time it reaches GEAR_ACCUM_SCALE.
+ * Wheel interval = crank_interval × GEAR_ACCUM_SCALE / GEAR_ACCUM_STEP.
+ */
+#define GEAR_ACCUM_SCALE  100000UL
+#define GEAR_ACCUM_STEP   ((uint32_t)((GEAR_RATIO) * GEAR_ACCUM_SCALE + 0.5f))
+
+/* Integer accumulator for virtual wheel revolutions (ISR-updated). */
+static volatile uint32_t s_gear_accum = 0;
 
 /**
  * Convert a microsecond timestamp to the 1/1024-second unit used by the
@@ -38,10 +54,12 @@ static inline uint16_t us_to_1024(uint64_t us)
 
 /* ---- ISR handlers ---------------------------------------------------- */
 
+/* wheel_isr — only used in dual-sensor mode; guard prevents unused-function
+ * warning without duplicating any logic. */
+#if !SINGLE_SENSOR_MODE
 static void IRAM_ATTR wheel_isr(void *arg)
 {
-    uint64_t now = esp_timer_get_time();  /* safe to call from ISR */
-
+    uint64_t now = esp_timer_get_time();
     portENTER_CRITICAL_ISR(&s_mux);
     if (now - s_last_wheel_us >= (uint64_t)HALL_DEBOUNCE_MS * 1000ULL) {
         if (s_last_wheel_us != 0) {
@@ -53,14 +71,28 @@ static void IRAM_ATTR wheel_isr(void *arg)
     }
     portEXIT_CRITICAL_ISR(&s_mux);
 }
+#endif
 
 static void IRAM_ATTR crank_isr(void *arg)
 {
     uint64_t now = esp_timer_get_time();
-
     portENTER_CRITICAL_ISR(&s_mux);
     if (now - s_last_crank_us >= (uint64_t)HALL_DEBOUNCE_MS * 1000ULL) {
         s_crank_revs++;
+#if SINGLE_SENSOR_MODE
+        if (s_last_crank_us != 0) {
+            /* Derive wheel interval from crank interval via gear ratio (integer). */
+            s_wheel_interval_us = (uint64_t)(now - s_last_crank_us)
+                                  * GEAR_ACCUM_SCALE / GEAR_ACCUM_STEP;
+        }
+        s_gear_accum += GEAR_ACCUM_STEP;
+        while (s_gear_accum >= GEAR_ACCUM_SCALE) {
+            s_gear_accum           -= GEAR_ACCUM_SCALE;
+            s_wheel_revs++;
+            s_last_wheel_us         = now;
+            s_wheel_event_time_1024 = us_to_1024(now);
+        }
+#endif
         s_last_crank_us         = now;
         s_crank_event_time_1024 = us_to_1024(now);
     }
@@ -71,10 +103,13 @@ static void IRAM_ATTR crank_isr(void *arg)
 
 void hall_sensor_init(void)
 {
-    /* Configure both GPIO pins as inputs with internal pull-ups.
-     * Sensors pull the line low when a magnet passes. */
+    uint64_t pin_mask = (1ULL << HALL_CRANK_GPIO);
+#if !SINGLE_SENSOR_MODE
+    pin_mask |= (1ULL << HALL_WHEEL_GPIO);
+#endif
+
     gpio_config_t cfg = {
-        .pin_bit_mask = (1ULL << HALL_WHEEL_GPIO) | (1ULL << HALL_CRANK_GPIO),
+        .pin_bit_mask = pin_mask,
         .mode         = GPIO_MODE_INPUT,
         .pull_up_en   = GPIO_PULLUP_ENABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
@@ -89,11 +124,19 @@ void hall_sensor_init(void)
         ESP_ERROR_CHECK(err);
     }
 
-    ESP_ERROR_CHECK(gpio_isr_handler_add(HALL_WHEEL_GPIO, wheel_isr, NULL));
     ESP_ERROR_CHECK(gpio_isr_handler_add(HALL_CRANK_GPIO, crank_isr, NULL));
+    ESP_LOGI(TAG, "Hall sensors ready — crank GPIO %d, wheel GPIO %d",
+             HALL_CRANK_GPIO, HALL_WHEEL_GPIO);
 
-    ESP_LOGI(TAG, "Hall sensors ready — wheel GPIO %d, crank GPIO %d",
-             HALL_WHEEL_GPIO, HALL_CRANK_GPIO);
+
+
+#if !SINGLE_SENSOR_MODE
+    ESP_ERROR_CHECK(gpio_isr_handler_add(HALL_WHEEL_GPIO, wheel_isr, NULL));
+    ESP_LOGI(TAG, "Hall sensor ready — wheel GPIO %d only (single-sensor, gear ratio %.3f)",
+             HALL_WHEEL_GPIO, (double)GEAR_RATIO);
+#endif
+
+
 }
 
 void hall_sensor_get_measurement(csc_measurement_t *meas)

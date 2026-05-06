@@ -141,6 +141,12 @@ GPIO 27 ──┬──────────────── COM  (common)
 - **Crank** — attach one magnet to the crank arm; mount the sensor on the
   chainstay.
 
+> **Fixed gear ratio note:** because the wheel and crank are coupled by a
+> fixed chainring and sprocket, cadence can be derived from wheel speed alone.
+> If you do not want to fit a crank sensor, set `SINGLE_SENSOR_MODE 1` in
+> `config.h` and configure `GEAR_RATIO_CHAINRING` / `GEAR_RATIO_SPROCKET` to
+> match your drivetrain.  The crank hall sensor and GPIO 19 are then unused.
+
 ---
 
 ## Configuration
@@ -149,8 +155,17 @@ All user-configurable constants are in [`main/config.h`](main/config.h):
 
 ```c
 /* GPIO pins — hall sensors */
-#define HALL_WHEEL_GPIO         18
-#define HALL_CRANK_GPIO         19
+#define HALL_WHEEL_GPIO         18  /* unused when SINGLE_SENSOR_MODE = 1 */
+#define HALL_CRANK_GPIO         19  /* used as the single sensor in SINGLE_SENSOR_MODE */
+
+/* 0 = dedicated wheel sensor on GPIO 18 + crank sensor on GPIO 19
+ * 1 = crank sensor only (GPIO 19); wheel revs derived from gear ratio */
+#define SINGLE_SENSOR_MODE      0
+
+/* Gear ratio — used only when SINGLE_SENSOR_MODE = 1.
+ * Wheel revolutions per crank revolution = chainring ÷ sprocket.
+ * You can enter the result directly or as a division:             */
+#define GEAR_RATIO              (50.0f / 17.0f)  /* ≈ 2.94 */
 
 /* Debounce — ignore pulses closer together than this (ms) */
 #define HALL_DEBOUNCE_MS        50
