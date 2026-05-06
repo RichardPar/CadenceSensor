@@ -105,6 +105,22 @@ A normally-open (NO) microswitch wired active-low.  The ESP32 internal
 pull-up keeps the line high; the switch pulls it low at the home end-stop.
 Update `STEPPER_LIMIT_GPIO` in `config.h` once wired.
 
+**Zero position = minimum resistance end-stop.**
+The homing routine drives the motor in the `STEPPER_DIR_DECREASE` direction
+(magnet moving *away* from the flywheel) until the switch triggers, then sets
+the step counter to 0.  Place the limit switch so it fires when the magnet
+assembly is at its furthest point from the flywheel — i.e. the lightest
+possible resistance.  Higher step counts move the magnet *toward* the flywheel,
+increasing resistance up to `STEPPER_MAX_STEPS`.
+
+```
+Resistance:   MIN ──────────────────────────────── MAX
+Step count:    0                                  STEPPER_MAX_STEPS
+               ▲
+          limit switch here
+          (home / zero position)
+```
+
 ```
 ESP32                        Limit switch (NO microswitch)
 ─────                        ─────────────────────────────
