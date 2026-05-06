@@ -4,8 +4,14 @@ ESP32-WROOM firmware that reads two SS41F Hall-effect sensors (wheel & crank)
 and broadcasts live cycling data over BLE using the standard **Cycling Speed
 and Cadence (CSC) Profile** (Bluetooth SIG CSP_SPEC v1.0).
 
-Compatible with Garmin, Wahoo, Zwift, Strava, and any app that supports the
+Compatible with Garmin, Wahoo, Zwift, MyWhoosh, Strava, and any app that supports the
 standard BLE CSC service (UUID **0x1816**).
+
+> **MyWhoosh** — confirmed working.
+>
+> **Zwift note:** Zwift splits speed and cadence into separate pairing slots.
+> To use both channels you must pair `CadenceSensor` twice — once under
+> *Speed Source* and again under *Cadence Source* in the Zwift pairing screen.
 
 ---
 
