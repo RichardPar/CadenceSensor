@@ -129,11 +129,14 @@ void hall_sensor_init(void)
              HALL_CRANK_GPIO, HALL_WHEEL_GPIO);
 
 
-
 #if !SINGLE_SENSOR_MODE
     ESP_ERROR_CHECK(gpio_isr_handler_add(HALL_WHEEL_GPIO, wheel_isr, NULL));
-    ESP_LOGI(TAG, "Hall sensor ready — wheel GPIO %d only (single-sensor, gear ratio %.3f)",
-             HALL_WHEEL_GPIO, (double)GEAR_RATIO);
+    ESP_LOGI(TAG, "Hall sensor ready — wheel GPIO %d)",
+             HALL_WHEEL_GPIO);
+#else
+    ESP_LOGI(TAG, "Single-sensor mode enabled — wheel revolutions derived from crank via gear ratio %.3f",
+             (double)GEAR_RATIO);   
+       
 #endif
 
 
