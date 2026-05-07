@@ -135,8 +135,8 @@ void hall_sensor_init(void)
              HALL_WHEEL_GPIO);
 #else
     ESP_LOGI(TAG, "Single-sensor mode enabled — wheel revolutions derived from crank via gear ratio %.3f",
-             (double)GEAR_RATIO);   
-       
+             (double)GEAR_RATIO);
+
 #endif
 
 
@@ -182,7 +182,12 @@ float hall_sensor_get_speed_kmh(void)
 
 void hall_sensor_reset_wheel_revs(void)
 {
+    // Acquire spinlock to ensure atomic read-modify-write operation.
+    // The wheel counter may be updated by the ISR on either CPU core.
     portENTER_CRITICAL(&s_mux);
+    // Reset cumulative wheel revolutions to zero.
+    // This is triggered by the BLE SC Control Point Reset Cumulative Value command.
     s_wheel_revs = 0;
+    // Release spinlock.
     portEXIT_CRITICAL(&s_mux);
 }
