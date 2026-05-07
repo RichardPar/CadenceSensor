@@ -144,6 +144,10 @@ void hall_sensor_init(void)
 
 void hall_sensor_get_measurement(csc_measurement_t *meas)
 {
+    /* Reads current sensor measurements into the provided structure
+     * - Locks spinlock to ensure atomic read
+     * - Populates cumulative revolutions and event timestamps
+     */
     portENTER_CRITICAL(&s_mux);
     meas->cumulative_wheel_revs = s_wheel_revs;
     meas->last_wheel_event_time = s_wheel_event_time_1024;
@@ -154,6 +158,10 @@ void hall_sensor_get_measurement(csc_measurement_t *meas)
 
 float hall_sensor_get_speed_kmh(void)
 {
+    /* Calculates current wheel speed in km/h
+     * - Uses wheel interval time to derive speed
+     * - Returns 0 if no recent pulse or if wheel has stopped
+     */
     portENTER_CRITICAL(&s_mux);
     uint64_t interval = s_wheel_interval_us;
     uint64_t last     = s_last_wheel_us;
