@@ -14,10 +14,10 @@
  * -------------------------------------------------------------------------- */
 
 /** GPIO connected to the wheel SS49E sensor output. */
-#define HALL_WHEEL_GPIO         18
+#define HALL_WHEEL_GPIO         34   /* ADC1_CH6 — input-only pin, no internal pull resistors */
 
 /** GPIO connected to the crank SS49E sensor output. */
-#define HALL_CRANK_GPIO         33
+#define HALL_CRANK_GPIO         33   /* ADC1_CH5 */
 
 /* --------------------------------------------------------------------------
  * Sensor — interrupt edge

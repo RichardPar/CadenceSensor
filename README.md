@@ -64,11 +64,13 @@ SS49E (crank)          ESP32
 ─────────────          ─────
   VCC ───────────────  3V3
   GND ───────────────  GND
-  OUT ──── 100 Ω ────  GPIO 33   (no pull-up / pull-down)
-```
+  OUT ──── 100 Ω ────  GPIO 33   ADC1_CH5  (no pull-up / pull-down)
 
-> A second SS49E (wheel sensor on GPIO 18) can be added and
-> `SINGLE_SENSOR_MODE` set to `0` if a dedicated wheel sensor is preferred.
+SS49E (wheel, optional)
+  VCC ───────────────  3V3
+  GND ───────────────  GND
+  OUT ──── 100 Ω ────  GPIO 34   ADC1_CH6  (input-only, no pull-up / pull-down)
+```
 
 ### Interrupt edge — crank sensor
 
@@ -164,8 +166,8 @@ All user-configurable constants are in [`main/config.h`](main/config.h):
 
 ```c
 /* GPIO pins */
-#define HALL_WHEEL_GPIO         18   /* unused when SINGLE_SENSOR_MODE = 1 */
-#define HALL_CRANK_GPIO         33
+#define HALL_WHEEL_GPIO         34   /* ADC1_CH6 — unused when SINGLE_SENSOR_MODE = 1 */
+#define HALL_CRANK_GPIO         33   /* ADC1_CH5 */
 
 /* 1 = crank sensor only; wheel revs derived from gear ratio (default)
  * 0 = dedicated wheel sensor on HALL_WHEEL_GPIO */
