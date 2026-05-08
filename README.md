@@ -1,8 +1,8 @@
 # CadenceSensor
 
-ESP32-WROOM firmware that reads two SS41F Hall-effect sensors (wheel & crank)
-and broadcasts live cycling data over BLE using the standard **Cycling Speed
-and Cadence (CSC) Profile** (Bluetooth SIG CSP_SPEC v1.0).
+ESP32-WROOM firmware that reads an SS49E linear ratiometric Hall-effect sensor
+(crank) and broadcasts live cycling data over BLE using the standard **Cycling
+Speed and Cadence (CSC) Profile** (Bluetooth SIG CSP_SPEC v1.0).
 
 Compatible with Garmin, Wahoo, Zwift, MyWhoosh, Strava, and any app that supports the
 standard BLE CSC service (UUID **0x1816**).
@@ -17,7 +17,9 @@ standard BLE CSC service (UUID **0x1816**).
 
 ## Features
 
-- Wheel and crank revolution counting via interrupt-driven Hall-effect sensors
+- Crank revolution counting via interrupt-driven SS49E Hall-effect sensor
+- Wheel revolutions derived from crank via fixed gear ratio (`SINGLE_SENSOR_MODE 1`)
+- Pulse-width filtering in the crank ISR — rejects sub-5 ms noise spikes from the stepper motor driver
 - BLE CSC Profile — 1 Hz notifications with cumulative revolutions and event timestamps
 - SC Control Point support — clients can reset the wheel revolution counter
 - Instantaneous speed logged to serial (km/h), calculated from wheel pulse interval
@@ -34,36 +36,50 @@ standard BLE CSC service (UUID **0x1816**).
 | Qty | Item |
 |-----|------|
 | 1 | ESP32-WROOM-32 dev board |
-| 2 | SS41F unipolar Hall-effect switch |
-| 2 | Small neodymium magnet (one per sensing location) |
+| 1 | SS49E linear ratiometric Hall-effect sensor (crank) |
+| 1 | Small neodymium magnet (crank arm) |
 | 1 | Stepper motor (e.g. NEMA 17) |
 | 1 | A4988 or DRV8825 stepper driver module |
 | 1 | 12 V power supply for motor (current rating ≥ motor rated current) |
 | 1 | 100 µF electrolytic capacitor (across VMOT/GND on driver) |
 | 1 | NO microswitch — homing limit switch *(optional but recommended)* |
 
-The SS41F has an active-low, open-collector output.  The ESP32's internal
-pull-up resistors are enabled in firmware, so no external resistors are
-required.  For cable runs longer than ~30 cm an external 4.7 kΩ pull-up to
-3.3 V is recommended.
+### SS49E sensor
 
-### Hall sensor wiring
+The SS49E is a **linear ratiometric** sensor — its output idles at Vcc/2
+(~1.65 V on a 3.3 V supply) with no magnetic field.  As a magnet passes, the
+output swings above or below the ESP32 GPIO threshold, producing a clean
+HIGH-going pulse (south pole) or LOW-going pulse (north pole).
+
+**Internal pull resistors must be disabled** — any pull-up or pull-down will
+shift the quiescent 1.65 V operating point and cause continuous false triggers.
+
+Add a 100 Ω series resistor between the sensor output and the GPIO pin to
+limit transient current and protect against overvoltage.
+
+### Sensor wiring
 
 ```
-SS41F (wheel)          ESP32
+SS49E (crank)          ESP32
 ─────────────          ─────
   VCC ───────────────  3V3
   GND ───────────────  GND
-  OUT ───────────────  GPIO 18
-
-SS41F (crank)
-  VCC ───────────────  3V3
-  GND ───────────────  GND
-  OUT ───────────────  GPIO 19
+  OUT ──── 100 Ω ────  GPIO 33   (no pull-up / pull-down)
 ```
 
-The output is pulled low when the sensor detects a magnet (south pole facing
-the sensor).  A falling-edge interrupt increments the revolution counter.
+> A second SS49E (wheel sensor on GPIO 18) can be added and
+> `SINGLE_SENSOR_MODE` set to `0` if a dedicated wheel sensor is preferred.
+
+### Interrupt edge — crank sensor
+
+The firmware is configured with `HALL_CRANK_INTR_EDGE = GPIO_INTR_ANYEDGE`.
+The ISR measures how long the pin stays away from the quiescent mid-rail level:
+
+- **Pulse ≥ 5 ms** → accepted as a real revolution (`HALL_CRANK_MIN_PULSE_US`)
+- **Pulse < 5 ms** → rejected as a noise spike
+
+Adjust `HALL_CRANK_MIN_PULSE_US` if counts are missed (lower it) or spurious
+counts still appear (raise it).
 
 ### Stepper motor wiring (A4988 / DRV8825)
 
@@ -96,8 +112,7 @@ GND  ──────────── GND   (shared ground)
 
 > **Microstepping:** MS1/MS2/MS3 pins are left unconnected (full-step mode by
 > default on A4988).  Tie them to 3V3/GND to select a finer step mode and
-> update `STEPPER_MAX_STEPS` and `STEPPER_STEP_PERIOD_US` in `config.h`
-> accordingly.
+> update `STEPPER_MAX_STEPS` in `config.h` accordingly.
 
 ### Limit switch wiring
 
@@ -136,16 +151,10 @@ GPIO 27 ──┬──────────────── COM  (common)
 
 ### Magnet placement
 
-- **Wheel** — attach one magnet to a spoke; mount the sensor on a fixed part
-  of the fork so the magnet passes within ~5 mm of the sensor face.
-- **Crank** — attach one magnet to the crank arm; mount the sensor on the
-  chainstay.
-
-> **Fixed gear ratio note:** because the wheel and crank are coupled by a
-> fixed chainring and sprocket, cadence can be derived from wheel speed alone.
-> If you do not want to fit a crank sensor, set `SINGLE_SENSOR_MODE 1` in
-> `config.h` and configure `GEAR_RATIO_CHAINRING` / `GEAR_RATIO_SPROCKET` to
-> match your drivetrain.  The crank hall sensor and GPIO 19 are then unused.
+- **Crank** — attach one magnet to the crank arm; mount the SS49E on the
+  chainstay so the magnet passes within ~5 mm of the sensor face per revolution.
+- Ensure the magnet face (north or south) consistently faces the sensor flat
+  face so the output swings in the same direction each pass.
 
 ---
 
@@ -154,21 +163,26 @@ GPIO 27 ──┬──────────────── COM  (common)
 All user-configurable constants are in [`main/config.h`](main/config.h):
 
 ```c
-/* GPIO pins — hall sensors */
-#define HALL_WHEEL_GPIO         18  /* unused when SINGLE_SENSOR_MODE = 1 */
-#define HALL_CRANK_GPIO         19  /* used as the single sensor in SINGLE_SENSOR_MODE */
+/* GPIO pins */
+#define HALL_WHEEL_GPIO         18   /* unused when SINGLE_SENSOR_MODE = 1 */
+#define HALL_CRANK_GPIO         33
 
-/* 0 = dedicated wheel sensor on GPIO 18 + crank sensor on GPIO 19
- * 1 = crank sensor only (GPIO 19); wheel revs derived from gear ratio */
-#define SINGLE_SENSOR_MODE      0
+/* 1 = crank sensor only; wheel revs derived from gear ratio (default)
+ * 0 = dedicated wheel sensor on HALL_WHEEL_GPIO */
+#define SINGLE_SENSOR_MODE      1
 
-/* Gear ratio — used only when SINGLE_SENSOR_MODE = 1.
- * Wheel revolutions per crank revolution = chainring ÷ sprocket.
- * You can enter the result directly or as a division:             */
-#define GEAR_RATIO              (50.0f / 17.0f)  /* ≈ 2.94 */
+/* Gear ratio — wheel revolutions per crank revolution (chainring ÷ sprocket) */
+#define GEAR_RATIO              (50.0f / 17.0f)   /* ≈ 2.94 */
 
-/* Debounce — ignore pulses closer together than this (ms) */
-#define HALL_DEBOUNCE_MS        50
+/* Interrupt edges */
+#define HALL_WHEEL_INTR_EDGE    GPIO_INTR_NEGEDGE
+#define HALL_CRANK_INTR_EDGE    GPIO_INTR_ANYEDGE  /* do not change — used for pulse-width filtering */
+
+/* Debounce — ignore counts closer together than this (max cadence limiter) */
+#define HALL_DEBOUNCE_MS        500   /* 500 ms → max ~120 RPM */
+
+/* Minimum pulse width for crank — rejects noise spikes */
+#define HALL_CRANK_MIN_PULSE_US 5000  /* 5 ms */
 
 /* Wheel circumference — 700c road bike with ~25 mm tyre */
 #define WHEEL_CIRCUMFERENCE_MM  2096
@@ -184,7 +198,6 @@ All user-configurable constants are in [`main/config.h`](main/config.h):
 #define STEPPER_DIR_GPIO        26
 #define STEPPER_LIMIT_GPIO      -1   /* set to a GPIO if a limit switch is fitted */
 #define STEPPER_MAX_STEPS       2000 /* tune to match physical travel */
-#define STEPPER_STEP_PERIOD_US  500  /* ~2000 steps/s */
 ```
 
 Set `WHEEL_CIRCUMFERENCE_MM` to match your tyre.  Common values:
@@ -198,6 +211,7 @@ Set `WHEEL_CIRCUMFERENCE_MM` to match your tyre.  Common values:
 | 29" MTB × 2.1" | 2288 mm |
 
 ---
+
 
 ## BLE GATT profile
 
@@ -241,8 +255,12 @@ The device advertises as **`CadenceSensor`** immediately after boot.  Serial
 output logs speed and revolution counts once per second:
 
 ```
-I (1234) main: Speed: 28.4 km/h  wheel_revs: 52  crank_revs: 18
+I (1234) main: Speed: 28.4 km/h  wheel: 52  crank: 18  rise: 18  rejected: 0  raw: 21
 ```
+
+`rise` = rising edges seen by the crank ISR; `rejected` = pulses shorter than
+`HALL_CRANK_MIN_PULSE_US`; `raw` = total ISR entries including noise.  These
+counters are useful for diagnosing sensor wiring issues.
 
 ---
 

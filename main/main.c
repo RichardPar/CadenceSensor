@@ -44,8 +44,9 @@ void app_main(void)
         ble_csc_send_measurement(&meas);
 
         float speed_kmh = hall_sensor_get_speed_kmh();
-        ESP_LOGI(TAG, "Speed: %.1f km/h  wheel_revs: %" PRIu32 "  crank_revs: %u",
-                 speed_kmh, meas.cumulative_wheel_revs, meas.cumulative_crank_revs);
+        ESP_LOGI(TAG, "Speed: %.1f km/h  wheel: %" PRIu32 "  crank: %u  rise: %" PRIu32 "  rejected: %" PRIu32 "  raw: %" PRIu32,
+                 speed_kmh, meas.cumulative_wheel_revs, meas.cumulative_crank_revs,
+                 meas.crank_rise_count, meas.crank_rejected, meas.crank_raw_triggers);
 
         vTaskDelay(pdMS_TO_TICKS(1000));
     }

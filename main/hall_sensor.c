@@ -25,6 +25,10 @@ static volatile uint64_t s_wheel_interval_us     = 0; /* interval between last t
 static volatile uint16_t s_crank_revs           = 0;
 static volatile uint64_t s_last_crank_us         = 0;
 static volatile uint16_t s_crank_event_time_1024 = 0;
+static volatile uint32_t s_crank_raw_triggers    = 0; /* every ISR entry, before debounce */
+static volatile uint64_t s_crank_rise_us         = 0; /* timestamp of last rising edge */
+static volatile uint32_t s_crank_rise_count      = 0; /* rising edges seen */
+static volatile uint32_t s_crank_rejected        = 0; /* falling edges rejected (pulse too short) */
 
 /* Integer-scaled gear ratio constants — computed at compile time from the
  * float GEAR_RATIO in config.h so that ISR arithmetic stays integer-only.
@@ -75,26 +79,44 @@ static void IRAM_ATTR wheel_isr(void *arg)
 
 static void IRAM_ATTR crank_isr(void *arg)
 {
-    uint64_t now = esp_timer_get_time();
+    uint64_t now   = esp_timer_get_time();
+    int      level = gpio_get_level(HALL_CRANK_GPIO);
     portENTER_CRITICAL_ISR(&s_mux);
-    if (now - s_last_crank_us >= (uint64_t)HALL_DEBOUNCE_MS * 1000ULL) {
-        s_crank_revs++;
+    s_crank_raw_triggers++;
+    if (level == 1) {
+        /* Rising edge — sensor triggered; record start time. */
+        s_crank_rise_us = now;
+        s_crank_rise_count++;
+    } else {
+        /* Falling edge — measure how long the pin was HIGH.
+         * Accept as a real revolution only if:
+         *   1. A rising edge was previously recorded.
+         *   2. The pulse lasted at least HALL_CRANK_MIN_PULSE_US.
+         *   3. Post-count debounce has elapsed (prevents double-counting). */
+        if (s_crank_rise_us != 0 &&
+            (now - s_crank_rise_us) >= (uint64_t)HALL_CRANK_MIN_PULSE_US &&
+            (now - s_last_crank_us) >= (uint64_t)HALL_DEBOUNCE_MS * 1000ULL) {
+            s_crank_revs++;
 #if SINGLE_SENSOR_MODE
-        if (s_last_crank_us != 0) {
-            /* Derive wheel interval from crank interval via gear ratio (integer). */
-            s_wheel_interval_us = (uint64_t)(now - s_last_crank_us)
-                                  * GEAR_ACCUM_SCALE / GEAR_ACCUM_STEP;
-        }
-        s_gear_accum += GEAR_ACCUM_STEP;
-        while (s_gear_accum >= GEAR_ACCUM_SCALE) {
-            s_gear_accum           -= GEAR_ACCUM_SCALE;
-            s_wheel_revs++;
-            s_last_wheel_us         = now;
-            s_wheel_event_time_1024 = us_to_1024(now);
-        }
+            if (s_last_crank_us != 0) {
+                /* Derive wheel interval from crank interval via gear ratio (integer). */
+                s_wheel_interval_us = (uint64_t)(now - s_last_crank_us)
+                                      * GEAR_ACCUM_SCALE / GEAR_ACCUM_STEP;
+            }
+            s_gear_accum += GEAR_ACCUM_STEP;
+            while (s_gear_accum >= GEAR_ACCUM_SCALE) {
+                s_gear_accum           -= GEAR_ACCUM_SCALE;
+                s_wheel_revs++;
+                s_last_wheel_us         = now;
+                s_wheel_event_time_1024 = us_to_1024(now);
+            }
 #endif
-        s_last_crank_us         = now;
-        s_crank_event_time_1024 = us_to_1024(now);
+            s_last_crank_us         = now;
+            s_crank_event_time_1024 = us_to_1024(now);
+        } else if (s_crank_rise_us != 0) {
+            s_crank_rejected++;
+        }
+        s_crank_rise_us = 0;
     }
     portEXIT_CRITICAL_ISR(&s_mux);
 }
@@ -103,19 +125,29 @@ static void IRAM_ATTR crank_isr(void *arg)
 
 void hall_sensor_init(void)
 {
-    uint64_t pin_mask = (1ULL << HALL_CRANK_GPIO);
-#if !SINGLE_SENSOR_MODE
-    pin_mask |= (1ULL << HALL_WHEEL_GPIO);
-#endif
-
-    gpio_config_t cfg = {
-        .pin_bit_mask = pin_mask,
+    /* Configure crank and wheel sensors separately so each can have its own
+     * interrupt edge polarity (HALL_CRANK_INTR_EDGE / HALL_WHEEL_INTR_EDGE). */
+    /* SS49E is a ratiometric linear sensor — internal pull resistors must be
+     * disabled so they do not disturb the quiescent Vcc/2 output voltage. */
+    gpio_config_t crank_cfg = {
+        .pin_bit_mask = (1ULL << HALL_CRANK_GPIO),
         .mode         = GPIO_MODE_INPUT,
-        .pull_up_en   = GPIO_PULLUP_ENABLE,
+        .pull_up_en   = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type    = GPIO_INTR_NEGEDGE,
+        .intr_type    = HALL_CRANK_INTR_EDGE,
     };
-    ESP_ERROR_CHECK(gpio_config(&cfg));
+    ESP_ERROR_CHECK(gpio_config(&crank_cfg));
+
+#if !SINGLE_SENSOR_MODE
+    gpio_config_t wheel_cfg = {
+        .pin_bit_mask = (1ULL << HALL_WHEEL_GPIO),
+        .mode         = GPIO_MODE_INPUT,
+        .pull_up_en   = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = HALL_WHEEL_INTR_EDGE,
+    };
+    ESP_ERROR_CHECK(gpio_config(&wheel_cfg));
+#endif
 
     /* gpio_install_isr_service may already have been called by another
      * component; ESP_ERR_INVALID_STATE in that case is benign. */
@@ -153,6 +185,9 @@ void hall_sensor_get_measurement(csc_measurement_t *meas)
     meas->last_wheel_event_time = s_wheel_event_time_1024;
     meas->cumulative_crank_revs = s_crank_revs;
     meas->last_crank_event_time = s_crank_event_time_1024;
+    meas->crank_raw_triggers    = s_crank_raw_triggers;
+    meas->crank_rise_count      = s_crank_rise_count;
+    meas->crank_rejected        = s_crank_rejected;
     portEXIT_CRITICAL(&s_mux);
 }
 

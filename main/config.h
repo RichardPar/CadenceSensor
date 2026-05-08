@@ -6,20 +6,42 @@
 /* --------------------------------------------------------------------------
  * Hardware — GPIO pin assignments
  *
- * Sensor: SS41F unipolar Hall-effect switch (active-low, open-collector).
- * Output is pulled high by the ESP32 internal pull-up and driven low when a
- * magnet (south pole) passes the sensor face.  Falling-edge interrupts are
- * used to detect each revolution.
+ * Sensors: SS49E linear ratiometric Hall-effect sensor.
+ * Output idles at Vcc/2 (~1.65 V on 3.3 V supply) with no magnetic field.
+ * As a magnet passes, the output swings above or below the GPIO threshold
+ * producing a clean pulse.  Internal pull resistors MUST be disabled so they
+ * do not disturb the quiescent operating point.
  * -------------------------------------------------------------------------- */
 
-/** GPIO connected to the wheel hall-effect sensor output. */
+/** GPIO connected to the wheel SS49E sensor output. */
 #define HALL_WHEEL_GPIO         18
 
-/** GPIO connected to the crank hall-effect sensor output. */
-#define HALL_CRANK_GPIO         19
+/** GPIO connected to the crank SS49E sensor output. */
+#define HALL_CRANK_GPIO         33
 
 /* --------------------------------------------------------------------------
- * Hall sensor — timing
+ * Sensor — interrupt edge
+ *
+ * SS49E output swings above the HIGH threshold when a south pole approaches
+ * and below the LOW threshold for a north pole.  ANYEDGE captures whichever
+ * direction the magnet produces and the pulse-width filter (HALL_CRANK_MIN_PULSE_US)
+ * rejects noise spikes from the quiescent ~1.65 V region.
+ *
+ * Use GPIO_INTR_POSEDGE / NEGEDGE if only one pole faces the sensor.
+ * -------------------------------------------------------------------------- */
+
+/** Interrupt edge for the wheel proximity sensor. */
+#define HALL_WHEEL_INTR_EDGE    GPIO_INTR_NEGEDGE
+
+/**
+ * The crank ISR uses both edges to measure pulse width; do not change this.
+ * Polarity is handled in software: a count is accepted on the falling edge
+ * only if the preceding HIGH pulse was at least HALL_CRANK_MIN_PULSE_US long.
+ */
+#define HALL_CRANK_INTR_EDGE    GPIO_INTR_ANYEDGE
+
+/* --------------------------------------------------------------------------
+ * Sensor — timing
  * -------------------------------------------------------------------------- */
 
 /**
@@ -31,7 +53,7 @@
  * be computed from cadence alone:
  *   wheel_revs = crank_revs × GEAR_RATIO_CHAINRING / GEAR_RATIO_SPROCKET
  */
-#define SINGLE_SENSOR_MODE      0
+#define SINGLE_SENSOR_MODE      1
 
 /**
  * Wheel revolutions per crank revolution.
@@ -47,8 +69,18 @@
 /**
  * Minimum time between accepted pulses on each sensor, in milliseconds.
  * Pulses arriving faster than this are treated as contact bounce and ignored.
+ * 500 ms → max ~120 RPM cadence; rejects electrical noise from the stepper
+ * motor driver coupling into the sensor GPIO.
  */
-#define HALL_DEBOUNCE_MS        50
+#define HALL_DEBOUNCE_MS        500
+
+/**
+ * Minimum duration the crank sensor output must stay HIGH before the pulse
+ * is accepted as a real revolution.  Noise spikes from the stepper driver are
+ * typically sub-microsecond; a genuine sensor pass lasts several milliseconds.
+ * Increase if spurious counts persist; decrease if slow-speed counts are missed.
+ */
+#define HALL_CRANK_MIN_PULSE_US 5000   /* 5 ms */
 
 /* --------------------------------------------------------------------------
  * Wheel geometry

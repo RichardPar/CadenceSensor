@@ -8,11 +8,13 @@
 
 /**
  * @file hall_sensor.h
- * @brief Hall-effect sensor driver for wheel and crank revolution counting.
+ * @brief SS49E linear Hall-effect sensor driver for wheel and crank revolution counting.
  *
- * Each sensor is connected between a GPIO pin (pulled high) and GND.
- * The magnet passing the sensor pulls the line low, triggering a falling-edge
- * interrupt that increments the appropriate revolution counter.
+ * The SS49E output idles at Vcc/2 with no field present.  As a magnet passes,
+ * the output swings above or below the GPIO threshold, producing a pulse whose
+ * width corresponds to the time the magnet face is near the sensor.  The crank
+ * ISR measures that pulse width to distinguish real passes from noise spikes.
+ * Internal GPIO pull resistors must be disabled on all sensor pins.
  */
 
 /**
@@ -27,6 +29,9 @@ typedef struct {
     uint16_t last_wheel_event_time;  /**< Timestamp of last wheel pulse (1/1024 s). */
     uint16_t cumulative_crank_revs;  /**< Total crank revolutions since power-on. */
     uint16_t last_crank_event_time;  /**< Timestamp of last crank pulse (1/1024 s). */
+    uint32_t crank_raw_triggers;     /**< Raw ISR entry count before debounce (debug). */
+    uint32_t crank_rise_count;       /**< Rising edges seen — 0 means wrong pin or dead sensor (debug). */
+    uint32_t crank_rejected;         /**< Falling edges rejected: pulse too short (debug). */
 } csc_measurement_t;
 
 /**
